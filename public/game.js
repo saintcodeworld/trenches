@@ -36,9 +36,14 @@
 
   // Client-side prediction state
   let localPlayer = null;
+  let predictedPlayer = null; // Our locally predicted position
   let inputs = { left: false, right: false, up: false, down: false };
-  let pendingInputs = [];
+  let pendingInputs = []; // Inputs not yet acknowledged by server
   let inputSeq = 0;
+
+  // Interpolation state for remote players
+  const interpBuffer = {}; // { playerId: [{ time, state }, ...] }
+  const INTERP_DELAY = 100; // ms — render remote players 100ms behind
 
   // Visual effects
   let muzzleFlashes = [];
@@ -47,6 +52,57 @@
 
   // Camera
   let camera = { x: 0, y: 0 };
+
+  // Client-side physics (mirrors server)
+  function isInTrenchClient(x) {
+    if (!config.trenchLeft) return false;
+    return (x >= config.trenchLeft.x1 && x <= config.trenchLeft.x2) ||
+           (x >= config.trenchRight.x1 && x <= config.trenchRight.x2);
+  }
+
+  function predictPhysics(p, inp) {
+    // Horizontal movement
+    p.vx = 0;
+    if (inp.left) { p.vx = -(config.moveSpeed || 4); p.facing = -1; }
+    if (inp.right) { p.vx = (config.moveSpeed || 4); p.facing = 1; }
+
+    // Crouching
+    p.crouching = inp.down && isInTrenchClient(p.x + (config.playerW || 30) / 2) && p.onGround;
+
+    // Jumping
+    if (inp.up && p.onGround && !p.crouching) {
+      p.vy = config.jumpForce || -12;
+      p.onGround = false;
+    }
+
+    // Gravity
+    p.vy += (config.gravity || 0.6);
+
+    // Apply velocity
+    p.x += p.vx;
+    p.y += p.vy;
+
+    // Ground collision
+    const PLAYER_W = config.playerW || 30;
+    const PLAYER_H = config.playerH || 50;
+    const PLAYER_CROUCH_H = config.playerCrouchH || 28;
+    const GROUND_Y = config.groundY || 420;
+    const inTrench = isInTrenchClient(p.x + PLAYER_W / 2);
+    const effectiveGround = inTrench && p.crouching
+      ? GROUND_Y - PLAYER_CROUCH_H + (config.trenchLeft ? config.trenchLeft.depth : 40)
+      : GROUND_Y - (p.crouching ? PLAYER_CROUCH_H : PLAYER_H);
+
+    if (p.y >= effectiveGround) {
+      p.y = effectiveGround;
+      p.vy = 0;
+      p.onGround = true;
+    }
+
+    // Clamp to map
+    const MAP_WIDTH = config.mapWidth || 1600;
+    if (p.x < 0) p.x = 0;
+    if (p.x > MAP_WIDTH - PLAYER_W) p.x = MAP_WIDTH - PLAYER_W;
+  }
 
   // ─── Lobby ───
   let selectedMode = '1v1';
@@ -201,7 +257,7 @@
     scoreboard.style.display = 'flex';
     hud.style.display = 'flex';
     roomInfo.style.display = 'block';
-    roomIdDisplay.textContent = roomInput.value.trim().toUpperCase();
+    roomIdDisplay.textContent = data.roomId || '';
 
     // Team badge
     teamBadge.textContent = myTeam.toUpperCase();
@@ -226,12 +282,19 @@
     'ArrowDown': 'down', 's': 'down', 'S': 'down'
   };
 
+  function sendInput() {
+    inputSeq++;
+    const inputSnapshot = { left: inputs.left, right: inputs.right, up: inputs.up, down: inputs.down };
+    socket.emit('player_input', { inputs: inputSnapshot, seq: inputSeq });
+    pendingInputs.push({ seq: inputSeq, inputs: inputSnapshot });
+  }
+
   document.addEventListener('keydown', (e) => {
     if (!joined) return;
     const action = keyMap[e.key];
     if (action && !inputs[action]) {
       inputs[action] = true;
-      socket.emit('player_input', inputs);
+      sendInput();
     }
     if (e.key === ' ' || e.key === 'f' || e.key === 'F') {
       e.preventDefault();
@@ -244,13 +307,14 @@
     const action = keyMap[e.key];
     if (action && inputs[action]) {
       inputs[action] = false;
-      socket.emit('player_input', inputs);
+      sendInput();
     }
   });
 
   // ─── Server Events ───
   socket.on('game_state', (state) => {
     serverState = state;
+    const now = performance.now();
 
     // Update scores
     scoreBulls.textContent = state.scores.bulls;
@@ -266,11 +330,51 @@
       // Respawn overlay
       if (!me.alive) {
         respawnOverlay.style.display = 'flex';
+        predictedPlayer = null;
       } else {
         respawnOverlay.style.display = 'none';
+
+        // ── Server Reconciliation ──
+        // Start from server's authoritative position
+        const serverAckedSeq = me.inputSeq || 0;
+
+        // Drop all pending inputs the server has already processed
+        pendingInputs = pendingInputs.filter(pi => pi.seq > serverAckedSeq);
+
+        // Re-predict from server state using unacknowledged inputs
+        predictedPlayer = {
+          x: me.x, y: me.y,
+          vx: 0, vy: me.vy || 0,
+          onGround: me.onGround !== undefined ? me.onGround : true,
+          facing: me.facing,
+          crouching: me.crouching,
+          team: me.team,
+          hp: me.hp,
+          alive: me.alive,
+          id: me.id
+        };
+
+        for (const pi of pendingInputs) {
+          predictPhysics(predictedPlayer, pi.inputs);
+        }
       }
 
-      localPlayer = me;
+      localPlayer = predictedPlayer || me;
+    }
+
+    // ── Buffer snapshots for remote player interpolation ──
+    for (const pid in state.players) {
+      if (pid === myId) continue;
+      if (!interpBuffer[pid]) interpBuffer[pid] = [];
+      interpBuffer[pid].push({ time: now, state: state.players[pid] });
+      // Keep only last 1 second of snapshots
+      while (interpBuffer[pid].length > 2 && interpBuffer[pid][0].time < now - 1000) {
+        interpBuffer[pid].shift();
+      }
+    }
+    // Clean up disconnected players
+    for (const pid in interpBuffer) {
+      if (!state.players[pid]) delete interpBuffer[pid];
     }
   });
 
@@ -695,6 +799,43 @@
     }
   }
 
+  // ─── Interpolation for remote players ───
+  function getInterpolatedPlayer(pid) {
+    const buf = interpBuffer[pid];
+    if (!buf || buf.length === 0) return serverState.players[pid] || null;
+
+    const renderTime = performance.now() - INTERP_DELAY;
+
+    // Find two snapshots to interpolate between
+    let prev = null, next = null;
+    for (let i = 0; i < buf.length - 1; i++) {
+      if (buf[i].time <= renderTime && buf[i + 1].time >= renderTime) {
+        prev = buf[i];
+        next = buf[i + 1];
+        break;
+      }
+    }
+
+    if (prev && next) {
+      const t = (renderTime - prev.time) / (next.time - prev.time);
+      return {
+        ...next.state,
+        x: prev.state.x + (next.state.x - prev.state.x) * t,
+        y: prev.state.y + (next.state.y - prev.state.y) * t
+      };
+    }
+
+    // If no pair found, use latest snapshot
+    return buf[buf.length - 1].state;
+  }
+
+  // ─── Local prediction tick (runs every frame) ───
+  function tickPrediction() {
+    if (!predictedPlayer || !predictedPlayer.alive) return;
+    predictPhysics(predictedPlayer, inputs);
+    localPlayer = predictedPlayer;
+  }
+
   // ─── Camera ───
   function updateCamera() {
     if (!localPlayer) return;
@@ -719,6 +860,9 @@
     const w = canvas.width;
     const h = canvas.height;
     const scale = getScale();
+
+    // Run local prediction for our player
+    tickPrediction();
 
     updateCamera();
 
@@ -750,9 +894,16 @@
     // Bullets
     drawBullets();
 
-    // Players
+    // Players — use predicted position for self, interpolated for others
     for (const pid in serverState.players) {
-      drawPlayer(serverState.players[pid]);
+      if (pid === myId) {
+        // Draw our predicted player
+        if (localPlayer) drawPlayer(localPlayer);
+      } else {
+        // Draw interpolated remote player
+        const interp = getInterpolatedPlayer(pid);
+        if (interp) drawPlayer(interp);
+      }
     }
 
     // Effects

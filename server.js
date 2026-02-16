@@ -124,6 +124,7 @@ function createPlayer(id, team) {
     onGround: true,
     facing: team === 'bulls' ? 1 : -1,
     inputs: { left: false, right: false, up: false, down: false },
+    inputSeq: 0,
     lastShot: 0,
     respawnAt: 0
   };
@@ -260,10 +261,14 @@ function tickRoom(room) {
       team: p.team,
       x: p.x,
       y: p.y,
+      vx: p.vx,
+      vy: p.vy,
       hp: p.hp,
       alive: p.alive,
       crouching: p.crouching,
-      facing: p.facing
+      facing: p.facing,
+      onGround: p.onGround,
+      inputSeq: p.inputSeq
     };
   }
   io.to(room.id).emit('game_state', state);
@@ -426,6 +431,7 @@ socket.on('join_room', (roomId) => {
     socket.emit('joined', {
       id: playerId,
       team,
+      roomId: roomId,
       mapWidth: MAP_WIDTH,
       mapHeight: MAP_HEIGHT,
       groundY: GROUND_Y,
@@ -433,18 +439,22 @@ socket.on('join_room', (roomId) => {
       trenchRight: TRENCH_RIGHT,
       playerW: PLAYER_W,
       playerH: PLAYER_H,
-      playerCrouchH: PLAYER_CROUCH_H
+      playerCrouchH: PLAYER_CROUCH_H,
+      moveSpeed: MOVE_SPEED,
+      gravity: GRAVITY,
+      jumpForce: JUMP_FORCE
     });
 
     io.to(roomId).emit('player_joined', { id: playerId, team });
   });
 
-  socket.on('player_input', (inputs) => {
+  socket.on('player_input', (data) => {
     if (!currentRoom || !rooms[currentRoom]) return;
     const room = rooms[currentRoom];
     const player = room.players[playerId];
     if (!player || !player.alive) return;
-    player.inputs = inputs;
+    player.inputs = data.inputs || data;
+    if (data.seq !== undefined) player.inputSeq = data.seq;
   });
 
   socket.on('player_shoot', () => {
