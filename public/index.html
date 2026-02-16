@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Market Warfare: The Trenches</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Lobby -->
+  <div id="lobby">
+    <div class="lobby-title">MARKET WARFARE</div>
+    <div class="lobby-subtitle">THE TRENCHES</div>
+    <div class="lobby-box">
+      <label>ENTER ROOM CODE</label>
+      <input type="text" id="room-input" placeholder="ROOM ID" maxlength="12" autocomplete="off">
+      <button id="join-btn">DEPLOY</button>
+    </div>
+    <div class="lobby-teams">
+      <span class="team-label-bulls">▲ BULLS</span>
+      <span style="color:#555">vs</span>
+      <span class="team-label-bears">▼ BEARS</span>
+    </div>
+  </div>
+
+  <!-- Game -->
+  <div id="game-container">
+    <canvas id="gameCanvas"></canvas>
+  </div>
+
+  <!-- CRT Overlay -->
+  <div id="crt-overlay"></div>
+  <div id="vignette"></div>
+
+  <!-- Scoreboard -->
+  <div id="scoreboard">
+    <span class="score-team score-bulls">BULLS <span class="score-num" id="score-bulls">0</span></span>
+    <span class="score-divider">—</span>
+    <span class="score-team score-bears"><span class="score-num" id="score-bears">0</span> BEARS</span>
+  </div>
+
+  <!-- HUD -->
+  <div id="hud">
+    <span class="team-badge" id="team-badge">BULLS</span>
+    <div class="hp-bar-bg"><div class="hp-bar-fill" id="hp-bar"></div></div>
+    <span class="hp-text" id="hp-text">100 HP</span>
+  </div>
+
+  <!-- Kill Feed -->
+  <div id="kill-feed"></div>
+
+  <!-- Respawn Overlay -->
+  <div id="respawn-overlay"><span>YOU DIED — RESPAWNING...</span></div>
+
+  <!-- Room Info -->
+  <div id="room-info">ROOM: <span id="room-id-display"></span></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>

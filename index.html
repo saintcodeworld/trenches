@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Bulls vs Bears: Trench War — FPS</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0a0a0a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            font-family: monospace;
+            flex-direction: column;
+        }
+        #wrap {
+            display: flex;
+            flex-direction: row;
+            gap: 4px;
+        }
+        canvas {
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            border: 2px solid #2a1a0a;
+        }
+        #divider {
+            width: 4px;
+            background: #333;
+            align-self: stretch;
+        }
+        #info {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #888;
+            font-size: 10px;
+            letter-spacing: 1px;
+            pointer-events: none;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="wrap">
+        <canvas id="c1"></canvas>
+        <div id="divider"></div>
+        <canvas id="c2"></canvas>
+    </div>
+    <div id="info">BULL: A/D move · S crouch · Space shoot | BEAR: ←/→ move · ↓ crouch · Enter shoot | R restart</div>
+
+<script>
+// ============================================================
+// SETUP — Two canvases, split-screen first-person
+// ============================================================
+const c1 = document.getElementById('c1');
+const c2 = document.getElementById('c2');
+const ctx1 = c1.getContext('2d');
+const ctx2 = c2.getContext('2d');
+
+const VW = 460; // viewport width per player
+const VH = 380; // viewport height per player
+c1.width = VW; c1.height = VH;
+c2.width = VW; c2.height = VH;
+
+function resize() {
+    const totalW = VW * 2 + 8;
+    const scaleX = (window.innerWidth - 30) / totalW;
+    const scaleY = (window.innerHeight - 50) / VH;
+    const s = Math.min(scaleX, scaleY, 2);
+    c1.style.width = c2.style.width = (VW * s) + 'px';
+    c1.style.height = c2.style.height = (VH * s) + 'px';
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ============================================================
+// GRAIN (pre-rendered once)
+// ============================================================
+const grainCvs = document.createElement('canvas');
+grainCvs.width = VW; grainCvs.height = VH;
+const grainCtx = grainCvs.getContext('2d');
+(function genGrain() {
+    const d = grainCtx.createImageData(VW, VH);
+    for (let i = 0; i < d.data.length; i += 4) {
+        const v = Math.random() * 25;
+        d.data[i] = d.data[i+1] = d.data[i+2] = v;
+        d.data[i+3] = 16;
+    }
+    grainCtx.putImageData(d, 0, 0);
+})();
+
+// ============================================================
+// PALETTE
+// ============================================================
+const P = {
+    skyTop: '#5a7a9e', skyBot: '#8faabe',
+    fieldFar: '#4a7a22', fieldMid: '#5e8c31', fieldNear: '#3d6a1e',
+    earthTop: '#5a3d2b', earthMid: '#4a3020', earthBot: '#3a2518', earthDark: '#2e1c12',
+    trenchWall: '#4a3322', trenchDark: '#3a2515', trenchFloor: '#2e1c12',
+    sandbag: '#8a7a60', sandbagDk: '#6b5e48', sandbagLn: '#5a4e3a',
+    dirtMound: '#6b4e35', dirtLt: '#7d5e42', dirtDk: '#5a3f28',
+    wood: '#6b5030', woodDk: '#4a3520',
+    wire: '#555', wireDk: '#333',
+    bullMain: '#2e7d32', bullLt: '#4caf50', bullDk: '#1b5e20', bullHelm: '#2e6b2e',
+    bearMain: '#c62828', bearLt: '#ef5350', bearDk: '#8e0000', bearHelm: '#b71c1c',
+    bulletYel: '#ffd54f', bulletOrg: '#ffb300', muzzle: '#fff9c4',
+    skin: '#d4a574',
+};
+
+// ============================================================
+// GAME WORLD — players exist on a 1D lateral axis (trenchX: -100..100)
+// They face each other across no-man's land.
+// ============================================================
+const TRENCH_HALF = 100; // lateral range
+
+const game = {
+    gameOver: false,
+    winner: '',
+    bullets: [],     // { owner, progress (0→1 = travel), lateralX }
+    hitEffects: [],   // { player, timer }
+    muzzleFlashes: [], // { player, timer }
+};
+
+class FPSPlayer {
+    constructor(team, controls, label) {
+        this.team = team;
+        this.controls = controls;
+        this.label = label;
+        this.x = 0;            // lateral position -100..100
+        this.speed = 2.5;
+        this.isCrouching = false;
+        this.health = 100;
+        this.maxHealth = 100;
+        this.lastShot = 0;
+        this.cooldown = 500;   // ms
+        this.hitFlash = 0;
+        this.shakeTimer = 0;
+        this.bobPhase = 0;
+    }
+
+    update(keys) {
+        if (game.gameOver) return;
+
+        if (keys[this.controls.left]) {
+            this.x -= this.speed;
+            this.bobPhase += 0.12;
+        }
+        if (keys[this.controls.right]) {
+            this.x += this.speed;
+            this.bobPhase += 0.12;
+        }
+        this.x = Math.max(-TRENCH_HALF, Math.min(TRENCH_HALF, this.x));
+
+        this.isCrouching = !!keys[this.controls.crouch];
+
+        if (keys[this.controls.shoot] && Date.now() - this.lastShot > this.cooldown) {
+            this.shoot();
+            this.lastShot = Date.now();
+        }
+
+        if (this.hitFlash > 0) this.hitFlash -= 0.04;
+        if (this.shakeTimer > 0) this.shakeTimer -= 0.5;
+    }
+
+    shoot() {
+        game.bullets.push({
+            owner: this.label,
+            progress: 0,
+            lateralX: this.x,
+            fromCrouch: this.isCrouching,
+        });
+        game.muzzleFlashes.push({ player: this.label, timer: 6 });
+        this.shakeTimer = 3;
+    }
+}
+
+const keys = {};
+window.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefault(); });
+window.addEventListener('keyup', e => { keys[e.code] = false; e.preventDefault(); });
+
+let bull = new FPSPlayer('bull',
+    { left: 'KeyA', right: 'KeyD', crouch: 'KeyS', shoot: 'Space' }, 'BULL');
+let bear = new FPSPlayer('bear',
+    { left: 'ArrowLeft', right: 'ArrowRight', crouch: 'ArrowDown', shoot: 'Enter' }, 'BEAR');
+
+function resetGame() {
+    bull = new FPSPlayer('bull',
+        { left: 'KeyA', right: 'KeyD', crouch: 'KeyS', shoot: 'Space' }, 'BULL');
+    bear = new FPSPlayer('bear',
+        { left: 'ArrowLeft', right: 'ArrowRight', crouch: 'ArrowDown', shoot: 'Enter' }, 'BEAR');
+    game.bullets = [];
+    game.hitEffects = [];
+    game.muzzleFlashes = [];
+    game.gameOver = false;
+    game.winner = '';
+}
+
+// ============================================================
+// BULLET LOGIC
+// ============================================================
+const BULLET_SPEED = 0.035; // progress per frame (0→1)
+
+function updateBullets() {
+    for (let i = game.bullets.length - 1; i >= 0; i--) {
+        const b = game.bullets[i];
+        b.progress += BULLET_SPEED;
+
+        if (b.progress >= 1) {
+            // Check hit
+            const target = b.owner === 'BULL' ? bear : bull;
+            const lateralDiff = Math.abs(b.lateralX - target.x);
+            const hitThreshold = target.isCrouching ? 8 : 22;
+            // If shooting from crouch and target is crouching, harder to hit
+            const verticalHit = !(b.fromCrouch === false && target.isCrouching);
+
+            if (lateralDiff < hitThreshold && verticalHit) {
+                target.health -= 12;
+                target.hitFlash = 1;
+                target.shakeTimer = 5;
+                game.hitEffects.push({ player: target.label, timer: 8 });
+            }
+            game.bullets.splice(i, 1);
+        }
+    }
+}
+
+// ============================================================
+// FIRST-PERSON VIEW RENDERER
+// ============================================================
+function renderFPV(ctx, self, enemy) {
+    const w = VW, h = VH;
+    const horizonY = h * 0.38;
+    const bobX = Math.sin(self.bobPhase) * (self.isCrouching ? 0.5 : 2);
+    const bobY = Math.abs(Math.sin(self.bobPhase * 2)) * (self.isCrouching ? 0 : 2);
+
+    // Screen shake
+    let sx = 0, sy = 0;
+    if (self.shakeTimer > 0) {
+        sx = (Math.random() - 0.5) * self.shakeTimer * 2;
+        sy = (Math.random() - 0.5) * self.shakeTimer * 2;
+    }
+
+    ctx.save();
+    ctx.translate(sx, sy);
+
+    // ---- SKY ----
+    const skyGrad = ctx.createLinearGradient(0, 0, 0, horizonY);
+    skyGrad.addColorStop(0, P.skyTop);
+    skyGrad.addColorStop(1, P.skyBot);
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(0, 0, w, horizonY);
+
+    // Sky scanlines
+    ctx.fillStyle = 'rgba(0,0,0,0.03)';
+    for (let y = 0; y < horizonY; y += 4) ctx.fillRect(0, y, w, 2);
+
+    // ---- GROUND / NO-MAN'S LAND (perspective) ----
+    const groundTop = horizonY;
+    const trenchTopY = h * 0.62; // where our trench wall starts
+
+    // Green field with perspective stripes
+    for (let y = groundTop; y < trenchTopY; y++) {
+        const t = (y - groundTop) / (trenchTopY - groundTop); // 0 at horizon, 1 at trench
+        const r = 58 + t * 20;
+        const g = 120 + t * 20;
+        const b2 = 30 + t * 15;
+        ctx.fillStyle = `rgb(${r|0},${g|0},${b2|0})`;
+        ctx.fillRect(0, y, w, 1);
+
+        // Perspective row lines
+        if (y % 6 < 2) {
+            ctx.fillStyle = `rgba(0,0,0,0.06)`;
+            ctx.fillRect(0, y, w, 1);
+        }
+    }
+
+    // ---- BARBED WIRE & OBSTACLES in no-man's land ----
+    const nmY = horizonY + (trenchTopY - horizonY) * 0.35; // mid no-man's land
+    drawNMObstacles(ctx, w, nmY, self.x, bobX);
+
+    // ---- ENEMY TRENCH (far side, near horizon) ----
+    const farTrenchY = horizonY - 4;
+    const farTrenchH = 18;
+    // Dirt mounds along far trench
+    ctx.fillStyle = P.dirtMound;
+    for (let dx = -300; dx < 300; dx += 45) {
+        const sx2 = w / 2 + (dx - self.x * 0.3) + bobX * 0.3;
+        ctx.beginPath();
+        ctx.ellipse(sx2, farTrenchY + farTrenchH, 18, 8, 0, Math.PI, 0);
+        ctx.fill();
+    }
+    // Far trench wall
+    ctx.fillStyle = P.trenchDark;
+    ctx.fillRect(0, farTrenchY, w, farTrenchH);
+    // Sandbags on far trench
+    ctx.fillStyle = P.sandbag;
+    for (let dx = -300; dx < 300; dx += 30) {
+        const sx2 = w / 2 + (dx - self.x * 0.3) + bobX * 0.3;
+        ctx.fillRect(sx2, farTrenchY - 4, 14, 6);
+        ctx.fillStyle = P.sandbagDk;
+        ctx.fillRect(sx2, farTrenchY, 14, 2);
+        ctx.fillStyle = P.sandbag;
+    }
+
+    // ---- ENEMY SOLDIER (visible across the field) ----
+    drawEnemyFPV(ctx, self, enemy, w, horizonY, trenchTopY, bobX);
+
+    // ---- OUR TRENCH WALL (foreground) ----
+    const twY = trenchTopY;
+    const twH = h - twY;
+
+    // Trench interior wall
+    const twGrad = ctx.createLinearGradient(0, twY, 0, h);
+    twGrad.addColorStop(0, P.trenchWall);
+    twGrad.addColorStop(0.4, P.earthMid);
+    twGrad.addColorStop(1, P.earthDark);
+    ctx.fillStyle = twGrad;
+    ctx.fillRect(0, twY, w, twH);
+
+    // Horizontal wood planks on trench wall
+    ctx.fillStyle = P.wood;
+    for (let py = twY + 8; py < h; py += 18) {
+        ctx.fillRect(0, py, w, 4);
+        ctx.fillStyle = P.woodDk;
+        ctx.fillRect(0, py + 4, w, 1);
+        ctx.fillStyle = P.wood;
+    }
+
+    // Vertical supports
+    ctx.fillStyle = P.woodDk;
+    for (let px = 40; px < w; px += 90) {
+        const supportX = px + ((-self.x * 0.8 + bobX) % 90);
+        ctx.fillRect(supportX, twY, 6, twH);
+        ctx.fillStyle = P.wood;
+        ctx.fillRect(supportX + 1, twY, 4, twH);
+        ctx.fillStyle = P.woodDk;
+    }
+
+    // Sandbags on top of our trench wall
+    const sbY = twY - 10;
+    ctx.fillStyle = P.sandbag;
+    for (let sx2 = -20; sx2 < w + 20; sx2 += 28) {
+        const bagX = sx2 + ((-self.x * 0.8 + bobX) % 28);
+        drawSandbagFPV(ctx, bagX, sbY);
+    }
+
+    // Dirt mounds on our side
+    ctx.fillStyle = P.dirtMound;
+    for (let dx = -200; dx < w + 200; dx += 60) {
+        const mx = dx + ((-self.x * 0.8 + bobX) % 60);
+        ctx.beginPath();
+        ctx.ellipse(mx, twY - 2, 22, 10, 0, Math.PI, 0);
+        ctx.fill();
+    }
+
+    // ---- GUN / WEAPON (first person) ----
+    drawGunFPV(ctx, self, w, h, bobX, bobY);
+
+    // ---- MUZZLE FLASH ----
+    const myFlash = game.muzzleFlashes.find(f => f.player === self.label);
+    if (myFlash && myFlash.timer > 0) {
+        const flashAlpha = myFlash.timer / 6;
+        ctx.globalAlpha = flashAlpha;
+        ctx.fillStyle = P.muzzle;
+        const fx = w / 2 + 38 + bobX;
+        const fy = h * 0.48 - (self.isCrouching ? -20 : 0) + bobY;
+        ctx.beginPath();
+        ctx.ellipse(fx, fy, 18, 12, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = P.bulletOrg;
+        ctx.beginPath();
+        ctx.ellipse(fx, fy, 10, 7, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+    }
+
+    // ---- INCOMING BULLETS (from enemy) ----
+    drawIncomingBullets(ctx, self, enemy, w, horizonY, trenchTopY, bobX);
+
+    // ---- HIT FLASH (red overlay when damaged) ----
+    if (self.hitFlash > 0) {
+        ctx.fillStyle = `rgba(200, 30, 30, ${self.hitFlash * 0.35})`;
+        ctx.fillRect(0, 0, w, h);
+    }
+
+    // ---- CROSSHAIR ----
+    const chX = w / 2;
+    const chY = h * 0.40;
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(chX - 10, chY); ctx.lineTo(chX - 4, chY); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(chX + 4, chY); ctx.lineTo(chX + 10, chY); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(chX, chY - 10); ctx.lineTo(chX, chY - 4); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(chX, chY + 4); ctx.lineTo(chX, chY + 10); ctx.stroke();
+    // Dot
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.fillRect(chX - 1, chY - 1, 2, 2);
+
+    // ---- GRAIN + SCANLINES ----
+    ctx.drawImage(grainCvs, 0, 0);
+    ctx.fillStyle = 'rgba(0,0,0,0.04)';
+    for (let y = 0; y < h; y += 3) ctx.fillRect(0, y, w, 1);
+
+    ctx.restore();
+
+    // ---- HUD (outside shake transform) ----
+    drawHUDfpv(ctx, self, w, h);
+}
+
+// ============================================================
+// DRAW ENEMY FROM FIRST PERSON
+// ============================================================
+function drawEnemyFPV(ctx, self, enemy, w, horizonY, trenchTopY, bobX) {
+    // Enemy lateral position relative to our view
+    const relX = (enemy.x - self.x) * 0.6;
+    const screenX = w / 2 + relX + bobX * 0.3;
+
+    // Enemy is at the far trench line
+    const baseY = horizonY + 6;
+
+    // Size (small because far away)
+    const eW = enemy.isCrouching ? 16 : 14;
+    const eH = enemy.isCrouching ? 10 : 28;
+    const eY = enemy.isCrouching ? baseY - 4 : baseY - eH + 4;
+
+    const isBull = enemy.team === 'bull';
+    const mainCol = isBull ? P.bullMain : P.bearMain;
+    const ltCol = isBull ? P.bullLt : P.bearLt;
+    const dkCol = isBull ? P.bullDk : P.bearDk;
+    const helmCol = isBull ? P.bullHelm : P.bearHelm;
+
+    // Only draw if on screen
+    if (screenX + eW < -20 || screenX - eW > w + 20) return;
+
+    if (enemy.isCrouching) {
+        // Crouching — just helmet peeking
+        ctx.fillStyle = helmCol;
+        ctx.fillRect(screenX - eW/2, eY, eW, 6);
+        ctx.fillStyle = dkCol;
+        ctx.fillRect(screenX - eW/2, eY + 5, eW, 2);
+        // Tiny gun barrel
+        ctx.fillStyle = '#444';
+        ctx.fillRect(screenX - 2, eY + 3, 8, 2);
+    } else {
+        // Standing enemy — visible torso + head
+        // Body
+        ctx.fillStyle = mainCol;
+        ctx.fillRect(screenX - eW/2, eY + 8, eW, eH - 8);
+
+        // Shoulders
+        ctx.fillStyle = ltCol;
+        ctx.fillRect(screenX - eW/2 - 1, eY + 8, 3, 4);
+        ctx.fillRect(screenX + eW/2 - 2, eY + 8, 3, 4);
+
+        // Head
+        ctx.fillStyle = P.skin;
+        ctx.fillRect(screenX - 3, eY + 3, 6, 5);
+
+        // Helmet
+        ctx.fillStyle = helmCol;
+        ctx.fillRect(screenX - 4, eY, 8, 5);
+        ctx.fillStyle = dkCol;
+        ctx.fillRect(screenX - 4, eY + 4, 8, 1);
+
+        // Eyes (facing us)
+        ctx.fillStyle = '#000';
+        ctx.fillRect(screenX - 2, eY + 4, 1, 1);
+        ctx.fillRect(screenX + 1, eY + 4, 1, 1);
+
+        // Gun
+        ctx.fillStyle = '#444';
+        ctx.fillRect(screenX + eW/2, eY + 12, 6, 2);
+
+        // Belt
+        ctx.fillStyle = '#3a2a1a';
+        ctx.fillRect(screenX - eW/2, eY + eH - 6, eW, 2);
+    }
+
+    // Hit flash on enemy
+    if (enemy.hitFlash > 0) {
+        ctx.globalAlpha = enemy.hitFlash * 0.5;
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(screenX - eW/2 - 2, eY - 2, eW + 4, eH + 4);
+        ctx.globalAlpha = 1;
+    }
+}
+
+// ============================================================
+// NO-MAN'S LAND OBSTACLES
+// ============================================================
+function drawNMObstacles(ctx, w, baseY, selfX, bobX) {
+    // Barbed wire posts + wire at various depths
+    const obstacles = [
+        { depth: 0.25, xOff: -80 }, { depth: 0.25, xOff: 80 },
+        { depth: 0.5, xOff: -40 }, { depth: 0.5, xOff: 40 }, { depth: 0.5, xOff: 0 },
+        { depth: 0.75, xOff: -60 }, { depth: 0.75, xOff: 60 },
+    ];
+
+    obstacles.forEach(ob => {
+        const parallax = 0.3 + ob.depth * 0.5;
+        const sx = w / 2 + (ob.xOff - selfX * parallax) + bobX * parallax;
+        const sy = baseY - (1 - ob.depth) * 30 + ob.depth * 20;
+        const scale = 0.4 + ob.depth * 0.6;
+
+        // Wooden X
+        ctx.strokeStyle = P.wood;
+        ctx.lineWidth = 2 * scale;
+        ctx.beginPath(); ctx.moveTo(sx - 8 * scale, sy + 10 * scale); ctx.lineTo(sx + 8 * scale, sy - 10 * scale); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(sx + 8 * scale, sy + 10 * scale); ctx.lineTo(sx - 8 * scale, sy - 10 * scale); ctx.stroke();
+
+        // Wire
+        ctx.strokeStyle = P.wire;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(sx - 12 * scale, sy - 2 * scale);
+        ctx.lineTo(sx + 12 * scale, sy - 2 * scale);
+        ctx.stroke();
+    });
+}
+
+// ============================================================
+// SANDBAG (first person, on trench wall)
+// ============================================================
+function drawSandbagFPV(ctx, x, y) {
+    ctx.fillStyle = P.sandbag;
+    ctx.fillRect(x, y, 24, 10);
+    ctx.fillStyle = P.sandbagDk;
+    ctx.fillRect(x, y + 8, 24, 2);
+    ctx.fillStyle = P.sandbagLn;
+    ctx.fillRect(x + 10, y + 1, 2, 8);
+}
+
+// ============================================================
+// FIRST-PERSON GUN
+// ============================================================
+function drawGunFPV(ctx, self, w, h, bobX, bobY) {
+    const isBull = self.team === 'bull';
+    const armColor = isBull ? P.bullMain : P.bearMain;
+    const armDk = isBull ? P.bullDk : P.bearDk;
+
+    const crouchOff = self.isCrouching ? 25 : 0;
+    const gunBaseX = w / 2 + 20 + bobX;
+    const gunBaseY = h * 0.58 + bobY + crouchOff;
+
+    // Arm
+    ctx.fillStyle = armColor;
+    ctx.fillRect(gunBaseX - 10, gunBaseY + 5, 30, 18);
+    ctx.fillStyle = armDk;
+    ctx.fillRect(gunBaseX - 10, gunBaseY + 20, 30, 4);
+
+    // Hand
+    ctx.fillStyle = P.skin;
+    ctx.fillRect(gunBaseX + 8, gunBaseY, 10, 8);
+
+    // Gun stock
+    ctx.fillStyle = '#5a3d20';
+    ctx.fillRect(gunBaseX - 15, gunBaseY - 5, 20, 14);
+    ctx.fillStyle = '#4a3018';
+    ctx.fillRect(gunBaseX - 15, gunBaseY + 7, 20, 3);
+
+    // Gun barrel
+    ctx.fillStyle = '#555';
+    ctx.fillRect(gunBaseX + 5, gunBaseY - 8, 40, 8);
+    ctx.fillStyle = '#444';
+    ctx.fillRect(gunBaseX + 5, gunBaseY - 2, 40, 3);
+    // Barrel tip
+    ctx.fillStyle = '#333';
+    ctx.fillRect(gunBaseX + 43, gunBaseY - 9, 4, 10);
+
+    // Sight
+    ctx.fillStyle = '#333';
+    ctx.fillRect(gunBaseX + 30, gunBaseY - 12, 3, 5);
+    ctx.fillRect(gunBaseX + 10, gunBaseY - 11, 3, 4);
+}
+
+// ============================================================
+// INCOMING BULLETS (from enemy perspective)
+// ============================================================
+function drawIncomingBullets(ctx, self, enemy, w, horizonY, trenchTopY, bobX) {
+    game.bullets.forEach(b => {
+        if (b.owner === self.label) return; // our own bullets go outward, not drawn here
+
+        // Bullet coming toward us: starts small at horizon, grows
+        const t = b.progress; // 0 = far, 1 = hit
+        const relX = (b.lateralX - self.x) * 0.6 * (1 - t * 0.5);
+        const bx = w / 2 + relX + bobX * 0.3;
+        const by = horizonY + (trenchTopY - horizonY) * t * 0.7;
+        const size = 2 + t * 6;
+
+        ctx.fillStyle = P.bulletYel;
+        ctx.globalAlpha = 0.6 + t * 0.4;
+        ctx.beginPath();
+        ctx.ellipse(bx, by, size, size * 0.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Trail
+        ctx.fillStyle = P.bulletOrg;
+        ctx.globalAlpha = 0.3;
+        ctx.beginPath();
+        ctx.ellipse(bx, by + 2, size * 0.6, size * 0.3, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+    });
+}
+
+// ============================================================
+// HUD PER VIEWPORT
+// ============================================================
+function drawHUDfpv(ctx, self, w, h) {
+    const isBull = self.team === 'bull';
+    const accent = isBull ? P.bullLt : P.bearLt;
+    const accentDk = isBull ? P.bullMain : P.bearMain;
+
+    // Team label
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(8, 8, 120, 32);
+    ctx.strokeStyle = accentDk;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(8, 8, 120, 32);
+
+    ctx.fillStyle = accent;
+    ctx.font = 'bold 13px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(self.label, 14, 23);
+
+    // Health bar
+    const barX = 55, barY = 14, barW = 65, barH = 10;
+    ctx.fillStyle = '#222';
+    ctx.fillRect(barX, barY, barW, barH);
+    const hpR = Math.max(0, self.health / self.maxHealth);
+    const hpCol = hpR > 0.5 ? '#4caf50' : hpR > 0.25 ? '#ff9800' : '#f44336';
+    ctx.fillStyle = hpCol;
+    ctx.fillRect(barX, barY, barW * hpR, barH);
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(barX, barY, barW, barH);
+
+    ctx.fillStyle = '#fff';
+    ctx.font = '9px monospace';
+    ctx.fillText(Math.max(0, self.health) + ' HP', barX + 4, barY + barH + 12);
+
+    // Stance indicator
+    ctx.fillStyle = self.isCrouching ? '#ffb300' : '#aaa';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(self.isCrouching ? 'CROUCHING' : 'STANDING', w - 12, 22);
+    ctx.textAlign = 'left';
+}
+
+// ============================================================
+// GAME OVER OVERLAY
+// ============================================================
+function drawGameOverOverlay() {
+    [ctx1, ctx2].forEach(ctx => {
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(0, 0, VW, VH);
+
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 30px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('GAME OVER', VW / 2, VH / 2 - 25);
+
+        const winner = bull.health <= 0 ? 'BEARS WIN!' : 'BULLS WIN!';
+        const winCol = bull.health <= 0 ? P.bearLt : P.bullLt;
+        ctx.fillStyle = winCol;
+        ctx.font = 'bold 22px monospace';
+        ctx.fillText(winner, VW / 2, VH / 2 + 10);
+
+        ctx.fillStyle = '#aaa';
+        ctx.font = '12px monospace';
+        ctx.fillText('Press R to restart', VW / 2, VH / 2 + 45);
+        ctx.textAlign = 'left';
+    });
+}
+
+// ============================================================
+// MAIN LOOP
+// ============================================================
+function loop() {
+    if (keys['KeyR'] && game.gameOver) resetGame();
+
+    // Update
+    bull.update(keys);
+    bear.update(keys);
+    updateBullets();
+
+    // Update muzzle flashes
+    for (let i = game.muzzleFlashes.length - 1; i >= 0; i--) {
+        game.muzzleFlashes[i].timer--;
+        if (game.muzzleFlashes[i].timer <= 0) game.muzzleFlashes.splice(i, 1);
+    }
+
+    // Update hit effects
+    for (let i = game.hitEffects.length - 1; i >= 0; i--) {
+        game.hitEffects[i].timer--;
+        if (game.hitEffects[i].timer <= 0) game.hitEffects.splice(i, 1);
+    }
+
+    // Render both viewports
+    renderFPV(ctx1, bull, bear);
+    renderFPV(ctx2, bear, bull);
+
+    // Check game over
+    if ((bull.health <= 0 || bear.health <= 0) && !game.gameOver) {
+        game.gameOver = true;
+    }
+    if (game.gameOver) drawGameOverOverlay();
+
+    requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
