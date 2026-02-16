@@ -12,15 +12,48 @@
   <div id="lobby">
     <div class="lobby-title">MARKET WARFARE</div>
     <div class="lobby-subtitle">THE TRENCHES</div>
+    
     <div class="lobby-box">
-      <label>ENTER ROOM CODE</label>
-      <input type="text" id="room-input" placeholder="ROOM ID" maxlength="12" autocomplete="off">
-      <button id="join-btn">DEPLOY</button>
+      <div class="mode-select">
+        <div class="mode-option" data-mode="1v1">
+          <div class="mode-title">1 VS 1</div>
+          <div class="mode-desc">DUEL MODE</div>
+          <div class="mode-players">2 PLAYERS</div>
+        </div>
+        <div class="mode-option" data-mode="2v2">
+          <div class="mode-title">2 VS 2</div>
+          <div class="mode-desc">SQUAD MODE</div>
+          <div class="mode-players">4 PLAYERS</div>
+        </div>
+      </div>
+
+      <div class="lobby-actions">
+        <button id="refresh-rooms-btn" class="action-btn">REFRESH LIST</button>
+      </div>
+
+      <div class="rooms-list" id="rooms-list">
+        <div class="rooms-header">
+          <span>ACTIVE ROOMS</span>
+          <span class="rooms-count" id="rooms-count">0 ROOMS</span>
+        </div>
+        <div class="rooms-grid" id="rooms-grid">
+          <!-- Rooms will be inserted here -->
+        </div>
+      </div>
     </div>
+
     <div class="lobby-teams">
       <span class="team-label-bulls">▲ BULLS</span>
       <span style="color:#555">vs</span>
       <span class="team-label-bears">▼ BEARS</span>
+    </div>
+  </div>
+
+  <!-- Countdown Overlay -->
+  <div id="countdown-overlay" class="countdown-overlay">
+    <div class="countdown-content">
+      <div class="countdown-title">MATCH STARTING</div>
+      <div class="countdown-number" id="countdown-number">3</div>
     </div>
   </div>
 
@@ -52,6 +85,15 @@
 
   <!-- Respawn Overlay -->
   <div id="respawn-overlay"><span>YOU DIED — RESPAWNING...</span></div>
+
+  <!-- Round Timer Overlay -->
+  <div id="round-timer-overlay" class="round-timer-overlay">
+    <div class="round-timer-content">
+      <div class="round-winner"></div>
+      <div class="round-scores"></div>
+      <div class="round-timer">NEXT ROUND IN: <span class="round-timer-number">2</span></div>
+    </div>
+  </div>
 
   <!-- Room Info -->
   <div id="room-info">ROOM: <span id="room-id-display"></span></div>

@@ -63,56 +63,223 @@ body {
   background: rgba(0, 0, 0, 0.7);
   border: 2px solid #00ff41;
   border-radius: 4px;
-  padding: 40px;
+  padding: 30px;
   display: flex;
   flex-direction: column;
-  align-items: center;
   gap: 20px;
   box-shadow: 0 0 30px rgba(0, 255, 65, 0.15);
+  min-width: 400px;
 }
 
-.lobby-box label {
-  font-size: 11px;
-  color: #aaa;
+/* Mode Selection */
+.mode-select {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 30px;
+}
+
+.mode-option {
+  flex: 1;
+  background: rgba(0, 255, 65, 0.1);
+  border: 2px solid #00ff41;
+  padding: 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.mode-option:hover {
+  background: rgba(0, 255, 65, 0.15);
+  transform: scale(1.02);
+}
+
+.mode-option.selected {
+  background: rgba(0, 255, 65, 0.2);
+  box-shadow: 0 0 20px rgba(0, 255, 65, 0.3);
+}
+
+.mode-title {
+  font-size: 18px;
+  color: #00ff41;
+  margin-bottom: 8px;
+  text-shadow: 0 0 10px #00ff41;
+}
+
+.mode-desc {
+  font-size: 10px;
+  color: #888;
+  margin-bottom: 12px;
   letter-spacing: 2px;
 }
 
-.lobby-box input {
-  background: #111;
-  border: 1px solid #333;
+.mode-players {
+  font-size: 12px;
   color: #00ff41;
-  font-family: 'Press Start 2P', monospace;
-  font-size: 14px;
-  padding: 12px 20px;
-  text-align: center;
-  width: 280px;
-  outline: none;
-  letter-spacing: 3px;
-  text-transform: uppercase;
 }
 
-.lobby-box input:focus {
-  border-color: #00ff41;
-  box-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
+.lobby-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 15px;
+  margin-bottom: 20px;
 }
 
-.lobby-box button {
+.action-btn {
   background: #00ff41;
   color: #000;
   border: none;
   font-family: 'Press Start 2P', monospace;
-  font-size: 12px;
-  padding: 14px 40px;
+  font-size: 11px;
+  padding: 12px 24px;
   cursor: pointer;
   letter-spacing: 2px;
   transition: all 0.2s;
 }
 
-.lobby-box button:hover {
+.action-btn:hover {
   background: #00cc33;
   box-shadow: 0 0 20px rgba(0, 255, 65, 0.5);
   transform: scale(1.05);
 }
+
+.action-divider {
+  color: #555;
+  font-size: 10px;
+}
+
+.rooms-list {
+  width: 100%;
+}
+
+.rooms-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 10px;
+  margin-bottom: 15px;
+  font-size: 11px;
+  color: #888;
+  letter-spacing: 2px;
+}
+
+.rooms-count {
+  color: #00ff41;
+}
+
+.rooms-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding-right: 5px;
+}
+
+.room-item {
+  background: rgba(0, 255, 65, 0.1);
+  border: 1px solid #00ff41;
+  padding: 15px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  transition: all 0.2s;
+  cursor: pointer;
+  position: relative;
+}
+
+.room-item::after {
+  content: attr(data-mode);
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  font-size: 8px;
+  color: #00ff41;
+  background: rgba(0, 0, 0, 0.5);
+  padding: 2px 6px;
+  border-radius: 2px;
+}
+
+.room-item:hover {
+  background: rgba(0, 255, 65, 0.2);
+  transform: scale(1.02);
+}
+
+.room-info {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.room-id {
+  font-size: 14px;
+  color: #00ff41;
+  letter-spacing: 3px;
+}
+
+.room-status {
+  font-size: 8px;
+  color: #888;
+  letter-spacing: 1px;
+}
+
+.room-players {
+  font-size: 12px;
+  color: #00ff41;
+  letter-spacing: 2px;
+}
+
+/* Scrollbar for rooms list */
+.rooms-grid::-webkit-scrollbar {
+  width: 6px;
+}
+
+.rooms-grid::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.rooms-grid::-webkit-scrollbar-thumb {
+  background: #00ff41;
+  border-radius: 3px;
+}
+
+/* Countdown Overlay */
+.countdown-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.8);
+  display: none;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.countdown-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+.countdown-title {
+  font-size: 24px;
+  color: #00ff41;
+  text-shadow: 0 0 20px #00ff41;
+  letter-spacing: 4px;
+}
+
+.countdown-number {
+  font-size: 72px;
+  color: #fff;
+  text-shadow: 0 0 30px #00ff41;
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.1); opacity: 0.8; }
+}
+
 
 .lobby-teams {
   display: flex;
@@ -344,6 +511,51 @@ body {
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
+}
+
+/* ─── Round Timer Overlay ─── */
+.round-timer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.8);
+  display: none;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.round-timer-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  text-align: center;
+}
+
+.round-winner {
+  font-size: 32px;
+  color: #00ff41;
+  text-shadow: 0 0 20px #00ff41;
+  letter-spacing: 4px;
+}
+
+.round-scores {
+  font-size: 24px;
+  color: #fff;
+  letter-spacing: 2px;
+  margin: 10px 0;
+}
+
+.round-timer {
+  font-size: 18px;
+  color: #888;
+}
+
+.round-timer-number {
+  color: #00ff41;
+  font-size: 24px;
+  text-shadow: 0 0 10px #00ff41;
+  animation: pulse 1s infinite;
 }
 
 /* ─── Room Info ─── */

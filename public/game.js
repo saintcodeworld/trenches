@@ -9,8 +9,12 @@
   const gameContainer = document.getElementById('game-container');
   const canvas = document.getElementById('gameCanvas');
   const ctx = canvas.getContext('2d');
-  const roomInput = document.getElementById('room-input');
-  const joinBtn = document.getElementById('join-btn');
+  const createRoomBtn = document.getElementById('create-room-btn');
+  const refreshRoomsBtn = document.getElementById('refresh-rooms-btn');
+  const roomsGrid = document.getElementById('rooms-grid');
+  const roomsCount = document.getElementById('rooms-count');
+  const countdownOverlay = document.getElementById('countdown-overlay');
+  const countdownNumber = document.getElementById('countdown-number');
   const scoreboard = document.getElementById('scoreboard');
   const scoreBulls = document.getElementById('score-bulls');
   const scoreBears = document.getElementById('score-bears');
@@ -45,16 +49,146 @@
   let camera = { x: 0, y: 0 };
 
   // ─── Lobby ───
-  joinBtn.addEventListener('click', joinRoom);
-  roomInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') joinRoom();
+  let selectedMode = '1v1';
+
+  // Mode selection
+  document.querySelectorAll('.mode-option').forEach(option => {
+    option.addEventListener('click', () => {
+      document.querySelectorAll('.mode-option').forEach(opt => opt.classList.remove('selected'));
+      option.classList.add('selected');
+      selectedMode = option.dataset.mode;
+      // Create room immediately when mode is selected
+      socket.emit('create_room', selectedMode);
+    });
   });
 
-  function joinRoom() {
-    const roomId = roomInput.value.trim().toUpperCase();
-    if (!roomId) return;
-    socket.emit('join_room', roomId);
+  refreshRoomsBtn.addEventListener('click', () => {
+    socket.emit('get_rooms');
+  });
+
+  function updateRoomsList(rooms) {
+    roomsCount.textContent = rooms.length + ' ROOMS';
+    roomsGrid.innerHTML = '';
+
+    rooms.forEach(room => {
+      const roomEl = document.createElement('div');
+      roomEl.className = 'room-item';
+      roomEl.dataset.mode = room.mode.toUpperCase();
+      roomEl.innerHTML = `
+        <div class="room-info">
+          <div class="room-id">${room.id}</div>
+          <div class="room-status">${room.status.toUpperCase()}</div>
+        </div>
+        <div class="room-players">${room.playerCount}/${room.maxPlayers}</div>
+      `;
+
+      roomEl.addEventListener('click', () => {
+        socket.emit('join_room', room.id);
+      });
+
+      roomsGrid.appendChild(roomEl);
+    });
   }
+
+  // Initial rooms fetch
+  socket.emit('get_rooms');
+
+  socket.on('available_rooms', (rooms) => {
+    updateRoomsList(rooms);
+  });
+
+  socket.on('rooms_updated', (rooms) => {
+    updateRoomsList(rooms);
+  });
+
+  socket.on('join_failed', (data) => {
+    alert(data.message);
+  });
+
+  socket.on('game_countdown_start', () => {
+    countdownOverlay.style.display = 'flex';
+    countdownOverlay.style.opacity = '1';
+    let count = 3;
+    countdownNumber.textContent = count;
+
+    const countdown = setInterval(() => {
+      count--;
+      if (count > 0) {
+        countdownNumber.textContent = count;
+        // Add pulse animation
+        countdownNumber.style.transform = 'scale(1.2)';
+        setTimeout(() => {
+          countdownNumber.style.transform = 'scale(1)';
+        }, 200);
+      } else {
+        clearInterval(countdown);
+        countdownOverlay.style.opacity = '0';
+        setTimeout(() => {
+          countdownOverlay.style.display = 'none';
+        }, 500);
+      }
+    }, 1000);
+  });
+
+  // Round end handling
+  const roundTimerOverlay = document.getElementById('round-timer-overlay');
+  const roundWinnerEl = roundTimerOverlay.querySelector('.round-winner');
+  const roundScoresEl = roundTimerOverlay.querySelector('.round-scores');
+  const roundTimerNumber = roundTimerOverlay.querySelector('.round-timer-number');
+
+  socket.on('round_end', (data) => {
+    roundTimerOverlay.style.display = 'flex';
+    roundWinnerEl.textContent = `${data.roundWinner.toUpperCase()} WIN ROUND ${data.currentRound}`;
+    roundScoresEl.textContent = `BULLS ${data.roundScores.bulls} — ${data.roundScores.bears} BEARS`;
+    
+    let timeLeft = 2;
+    roundTimerNumber.textContent = timeLeft;
+
+    const timer = setInterval(() => {
+      timeLeft--;
+      roundTimerNumber.textContent = timeLeft;
+      if (timeLeft <= 0) {
+        clearInterval(timer);
+        roundTimerOverlay.style.display = 'none';
+      }
+    }, 1000);
+  });
+
+  socket.on('match_end', (data) => {
+    roundTimerOverlay.style.display = 'flex';
+    roundWinnerEl.textContent = `${data.winner.toUpperCase()} WIN THE MATCH!`;
+    roundScoresEl.textContent = 'BEST OF 3 VICTORY';
+    roundTimerOverlay.querySelector('.round-timer').style.display = 'none';
+
+    setTimeout(() => {
+      roundTimerOverlay.style.display = 'none';
+      roundTimerOverlay.querySelector('.round-timer').style.display = 'block';
+    }, 5000);
+  });
+
+  socket.on('round_start', (data) => {
+    // Update any UI elements for new round
+    if (data.currentRound > 1) {
+      countdownOverlay.style.display = 'flex';
+      countdownOverlay.style.opacity = '1';
+      countdownNumber.textContent = 'ROUND ' + data.currentRound;
+      setTimeout(() => {
+        countdownOverlay.style.opacity = '0';
+        setTimeout(() => {
+          countdownOverlay.style.display = 'none';
+        }, 500);
+      }, 1000);
+    }
+  });
+
+  socket.on('game_start', () => {
+    // Game starts automatically after countdown
+  });
+
+  socket.on('game_reset', () => {
+    // Other player left during game
+    window.location.reload();
+  });
 
   socket.on('joined', (data) => {
     myId = data.id;

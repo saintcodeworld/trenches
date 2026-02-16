@@ -33,14 +33,43 @@ const TRENCH_RIGHT = { x1: 1250, x2: 1550, depth: 40 };
 // ─── Room State ───
 const rooms = {};
 
-function createRoom(roomId) {
+function createRoom(roomId, creatorId, mode) {
   return {
     id: roomId,
     players: {},
     bullets: [],
     scores: { bulls: 0, bears: 0 },
-    lastTick: Date.now()
+    roundScores: { bulls: 0, bears: 0 }, // Track round wins
+    lastTick: Date.now(),
+    status: 'waiting',  // waiting, countdown, active, round_end
+    createdAt: Date.now(),
+    creatorId: creatorId,
+    countdownStartTime: null,
+    roundEndTime: null, // Track when round ends for restart timer
+    currentRound: 1, // Track current round number
+    mode: mode, // '1v1' or '2v2'
+    maxPlayers: mode === '1v1' ? 2 : 4
   };
+}
+
+// Get list of available rooms
+function getAvailableRooms() {
+  const availableRooms = [];
+  for (const roomId in rooms) {
+    const room = rooms[roomId];
+    const playerCount = Object.keys(room.players).length;
+    if (playerCount < room.maxPlayers) {
+      availableRooms.push({
+        id: roomId,
+        playerCount,
+        status: room.status,
+        createdAt: room.createdAt,
+        mode: room.mode,
+        maxPlayers: room.maxPlayers
+      });
+    }
+  }
+  return availableRooms;
 }
 
 function getRoom(roomId) {
@@ -56,6 +85,13 @@ function assignTeam(room) {
     if (room.players[pid].team === 'bulls') bulls++;
     else bears++;
   }
+
+  // For 2v2, ensure each team has max 2 players
+  if (room.mode === '2v2') {
+    if (bulls >= 2) return 'bears';
+    if (bears >= 2) return 'bulls';
+  }
+
   return bulls <= bears ? 'bulls' : 'bears';
 }
 
@@ -231,6 +267,95 @@ function tickRoom(room) {
     };
   }
   io.to(room.id).emit('game_state', state);
+
+  // Check for team elimination
+  if (room.status === 'active') {
+    let bullsAlive = false;
+    let bearsAlive = false;
+
+    for (const pid in room.players) {
+      const p = room.players[pid];
+      if (p.alive) {
+        if (p.team === 'bulls') bullsAlive = true;
+        else bearsAlive = true;
+      }
+    }
+
+    // If one team is eliminated
+    if (!bullsAlive || !bearsAlive) {
+      room.status = 'round_end';
+      room.roundEndTime = Date.now();
+
+      // Update round scores
+      if (!bullsAlive) room.roundScores.bears++;
+      else room.roundScores.bulls++;
+
+      // Check for match winner
+      const winner = checkMatchWinner(room);
+      if (winner) {
+        io.to(room.id).emit('match_end', { winner });
+        room.status = 'waiting';
+        resetRoom(room);
+      } else {
+        io.to(room.id).emit('round_end', {
+          roundWinner: !bullsAlive ? 'bears' : 'bulls',
+          roundScores: room.roundScores,
+          currentRound: room.currentRound
+        });
+
+        // Schedule next round
+        setTimeout(() => {
+          if (rooms[room.id]) {
+            startNewRound(room);
+          }
+        }, 2000); // 2 second delay
+      }
+    }
+  }
+}
+
+function checkMatchWinner(room) {
+  if (room.roundScores.bulls >= 2) return 'bulls';
+  if (room.roundScores.bears >= 2) return 'bears';
+  return null;
+}
+
+function startNewRound(room) {
+  room.currentRound++;
+  room.status = 'active';
+  room.roundEndTime = null;
+
+  // Reset players
+  for (const pid in room.players) {
+    const player = room.players[pid];
+    const pos = spawnPosition(player.team);
+    player.x = pos.x;
+    player.y = pos.y;
+    player.hp = 100;
+    player.alive = true;
+    player.vx = 0;
+    player.vy = 0;
+  }
+
+  room.bullets = [];
+  io.to(room.id).emit('round_start', { currentRound: room.currentRound });
+}
+
+function resetRoom(room) {
+  room.roundScores = { bulls: 0, bears: 0 };
+  room.currentRound = 1;
+  room.bullets = [];
+  
+  for (const pid in room.players) {
+    const player = room.players[pid];
+    const pos = spawnPosition(player.team);
+    player.x = pos.x;
+    player.y = pos.y;
+    player.hp = 100;
+    player.alive = true;
+    player.vx = 0;
+    player.vy = 0;
+  }
 }
 
 // ─── Socket Handling ───
@@ -238,21 +363,65 @@ io.on('connection', (socket) => {
   let currentRoom = null;
   let playerId = socket.id;
 
-  socket.on('join_room', (roomId) => {
-    if (currentRoom) {
-      socket.leave(currentRoom);
-      const oldRoom = rooms[currentRoom];
-      if (oldRoom) {
-        delete oldRoom.players[playerId];
-        io.to(currentRoom).emit('player_left', playerId);
-      }
-    }
+  // Create room handler
+socket.on('create_room', (mode) => {
+  const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
+  rooms[roomId] = createRoom(roomId, playerId, mode || '1v1');
+  io.emit('rooms_updated', getAvailableRooms());
+  
+  // Auto-join the creator to their room
+  socket.emit('room_created', roomId);
+  socket.emit('join_room', roomId);
+});
 
-    currentRoom = roomId;
-    socket.join(roomId);
-    const room = getRoom(roomId);
-    const team = assignTeam(room);
-    room.players[playerId] = createPlayer(playerId, team);
+// Get rooms handler
+socket.on('get_rooms', () => {
+  socket.emit('available_rooms', getAvailableRooms());
+});
+
+socket.on('join_room', (roomId) => {
+  if (currentRoom) {
+    socket.leave(currentRoom);
+    const oldRoom = rooms[currentRoom];
+    if (oldRoom) {
+      delete oldRoom.players[playerId];
+      io.to(currentRoom).emit('player_left', playerId);
+      io.emit('rooms_updated', getAvailableRooms());
+    }
+  }
+
+  const room = getRoom(roomId);
+  if (!room || Object.keys(room.players).length >= room.maxPlayers) {
+    socket.emit('join_failed', { message: 'Room is full' });
+    return;
+  }
+
+  currentRoom = roomId;
+  socket.join(roomId);
+  const team = assignTeam(room);
+  room.players[playerId] = createPlayer(playerId, team);
+
+  // Check if room is ready to start
+  const playerCount = Object.keys(room.players).length;
+  const isRoomFull = playerCount === room.maxPlayers;
+  const is1v1Ready = room.mode === '1v1' && playerCount === 2;
+  const is2v2Ready = room.mode === '2v2' && playerCount === 4;
+
+  if (isRoomFull || is1v1Ready || is2v2Ready) {
+    room.status = 'countdown';
+    room.countdownStartTime = Date.now();
+    io.to(roomId).emit('game_countdown_start');
+    
+    // Start the game after 3 seconds
+    setTimeout(() => {
+      if (rooms[roomId]) {
+        rooms[roomId].status = 'active';
+        io.to(roomId).emit('game_start');
+      }
+    }, 3000);
+  }
+
+  io.emit('rooms_updated', getAvailableRooms());
 
     socket.emit('joined', {
       id: playerId,
@@ -314,10 +483,20 @@ io.on('connection', (socket) => {
       delete rooms[currentRoom].players[playerId];
       io.to(currentRoom).emit('player_left', playerId);
 
+      // Reset room status if game was in progress
+      const room = rooms[currentRoom];
+      if (room && room.status !== 'waiting') {
+        room.status = 'waiting';
+        room.countdownStartTime = null;
+        io.to(currentRoom).emit('game_reset');
+      }
+
       // Clean up empty rooms
       if (Object.keys(rooms[currentRoom].players).length === 0) {
         delete rooms[currentRoom];
       }
+
+      io.emit('rooms_updated', getAvailableRooms());
     }
   });
 });
