@@ -11,6 +11,25 @@ const io = new Server(server, {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Serve favicon from root
+app.get('/favicon.png', (req, res) => {
+  res.sendFile(path.join(__dirname, 'favicon.png'));
+});
+
+// Serve favicon sizes
+app.get('/favicon-32.png', (req, res) => {
+  res.sendFile(path.join(__dirname, 'favicon-32.png'));
+});
+app.get('/favicon-64.png', (req, res) => {
+  res.sendFile(path.join(__dirname, 'favicon-64.png'));
+});
+app.get('/favicon-128.png', (req, res) => {
+  res.sendFile(path.join(__dirname, 'favicon-128.png'));
+});
+app.get('/favicon-192.png', (req, res) => {
+  res.sendFile(path.join(__dirname, 'favicon-192.png'));
+});
+
 // ─── Game Constants ───
 const TICK_RATE = 60;
 const MAP_WIDTH = 1600;
